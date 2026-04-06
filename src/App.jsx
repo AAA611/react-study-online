@@ -186,6 +186,48 @@ function getPreviewStyles(theme) {
 
 let babelLoader = null;
 
+function formatConsoleValue(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value instanceof Error) {
+    return value.stack || value.message;
+  }
+
+  if (typeof value === "undefined") {
+    return "undefined";
+  }
+
+  if (typeof value === "function") {
+    return `[Function ${value.name || "anonymous"}]`;
+  }
+
+  if (typeof value === "symbol") {
+    return value.toString();
+  }
+
+  try {
+    return JSON.stringify(
+      value,
+      (_, currentValue) => {
+        if (currentValue instanceof Error) {
+          return {
+            name: currentValue.name,
+            message: currentValue.message,
+            stack: currentValue.stack
+          };
+        }
+
+        return currentValue;
+      },
+      2
+    );
+  } catch {
+    return String(value);
+  }
+}
+
 async function loadBabel() {
   if (!babelLoader) {
     babelLoader = import("@babel/standalone").then((module) => module.default ?? module);
@@ -221,7 +263,7 @@ function configureMonacoForReact(monaco) {
   monacoConfigured = true;
 }
 
-async function createRunnerHost(source) {
+async function createRunnerHost(source, onConsole) {
   const Babel = await loadBabel();
   const transformed = Babel.transform(source, {
     presets: ["react"]
@@ -232,8 +274,35 @@ async function createRunnerHost(source) {
     renderedNode = node;
   };
 
-  const runtime = new Function("React", "render", `"use strict";\n${transformed}`);
-  runtime(React, render);
+  const createConsoleMethod = (level) => {
+    const nativeMethod = console[level] ?? console.log;
+
+    return (...args) => {
+      nativeMethod(...args);
+      onConsole({
+        level,
+        text: args.map((value) => formatConsoleValue(value)).join(" ")
+      });
+    };
+  };
+
+  const consoleProxy = {
+    log: createConsoleMethod("log"),
+    info: createConsoleMethod("info"),
+    warn: createConsoleMethod("warn"),
+    error: createConsoleMethod("error"),
+    debug: createConsoleMethod("debug"),
+    clear: () => {
+      console.clear();
+      onConsole({
+        level: "clear",
+        text: ""
+      });
+    }
+  };
+
+  const runtime = new Function("React", "render", "console", `"use strict";\n${transformed}`);
+  runtime(React, render, consoleProxy);
 
   if (!renderedNode) {
     throw new Error('代码没有调用 render(...)。可以保留示例里的 "render(<App />)" 结构。');
@@ -273,7 +342,7 @@ class PreviewBoundary extends React.Component {
   }
 }
 
-function Preview({ code, runVersion, theme, onStart, onError, onReady }) {
+function Preview({ code, runVersion, theme, onConsole, onStart, onError, onReady }) {
   const hostRef = useRef(null);
   const rootRef = useRef(null);
   const mountNodeRef = useRef(null);
@@ -304,11 +373,13 @@ function Preview({ code, runVersion, theme, onStart, onError, onReady }) {
     }
 
     let cancelled = false;
-    onStart();
+    onStart(runVersion);
 
     const runPreview = async () => {
       try {
-        const node = await createRunnerHost(code);
+        const node = await createRunnerHost(code, (entry) => {
+          onConsole(runVersion, entry);
+        });
         if (cancelled) {
           return;
         }
@@ -362,9 +433,11 @@ function resolveInitialTheme() {
 export default function App() {
   const [code, setCode] = useState(starterCode);
   const [error, setError] = useState("");
+  const [logs, setLogs] = useState([]);
   const [runVersion, setRunVersion] = useState(0);
   const [isRunning, setIsRunning] = useState(true);
   const [theme, setTheme] = useState(resolveInitialTheme);
+  const activeRunRef = useRef(0);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -454,7 +527,29 @@ export default function App() {
               code={code}
               runVersion={runVersion}
               theme={theme}
-              onStart={() => setIsRunning(true)}
+              onConsole={(entryRunVersion, entry) => {
+                if (entryRunVersion !== activeRunRef.current) {
+                  return;
+                }
+
+                if (entry.level === "clear") {
+                  setLogs([]);
+                  return;
+                }
+
+                setLogs((currentLogs) => [
+                  ...currentLogs,
+                  {
+                    id: `${entryRunVersion}-${currentLogs.length + 1}`,
+                    ...entry
+                  }
+                ]);
+              }}
+              onStart={(currentRunVersion) => {
+                activeRunRef.current = currentRunVersion;
+                setLogs([]);
+                setIsRunning(true);
+              }}
               onError={(message) => {
                 setError(message);
                 setIsRunning(false);
@@ -472,6 +567,26 @@ export default function App() {
             ) : (
               <p>{theme === "dark" ? "暗色主题已启用，代码会随着输入实时更新。" : "代码运行成功。你可以直接修改左侧 JSX，结果会自动更新。"}</p>
             )}
+          </div>
+
+          <div className="console-panel">
+            <div className="console-header">
+              <span>控制台输出</span>
+              <span className="console-count">{logs.length} 条</span>
+            </div>
+
+            <div className="console-body">
+              {logs.length === 0 ? (
+                <p className="console-empty">这里会显示你代码中的 console.log / warn / error 输出。</p>
+              ) : (
+                logs.map((entry) => (
+                  <pre key={entry.id} className={`console-entry console-${entry.level}`}>
+                    <span className="console-level">{entry.level}</span>
+                    <span>{entry.text}</span>
+                  </pre>
+                ))
+              )}
+            </div>
           </div>
         </section>
       </main>
