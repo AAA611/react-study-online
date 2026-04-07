@@ -430,10 +430,19 @@ function resolveInitialTheme() {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+function resolveInitialAnswer() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  return window.localStorage.getItem("react-playground-answer") ?? "";
+}
+
 export default function App() {
   const [code, setCode] = useState(starterCode);
   const [error, setError] = useState("");
   const [logs, setLogs] = useState([]);
+  const [answer, setAnswer] = useState(resolveInitialAnswer);
   const [runVersion, setRunVersion] = useState(0);
   const [isRunning, setIsRunning] = useState(true);
   const [theme, setTheme] = useState(resolveInitialTheme);
@@ -443,6 +452,10 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("react-playground-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem("react-playground-answer", answer);
+  }, [answer]);
 
   const runCode = () => {
     setRunVersion((value) => value + 1);
@@ -511,6 +524,36 @@ export default function App() {
                 wordWrap: "on"
               }}
             />
+          </div>
+
+          <div className="answer-panel">
+            <div className="answer-header">
+              <div>
+                <p className="answer-eyebrow">Answer Space</p>
+                <h2>手写答案</h2>
+              </div>
+
+              <div className="answer-actions">
+                <span className="answer-count">{answer.trim().length} 字</span>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => setAnswer("")}
+                  disabled={answer.length === 0}
+                >
+                  清空
+                </button>
+              </div>
+            </div>
+
+            <label className="answer-field">
+              <span className="sr-only">在这里写下你的分析和答案</span>
+              <textarea
+                value={answer}
+                onChange={(event) => setAnswer(event.target.value)}
+                placeholder="在这里写下你的输出推导、关键原因，或者直接写最终答案。内容会自动保存在本地浏览器。"
+              />
+            </label>
           </div>
         </section>
 
